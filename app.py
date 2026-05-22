@@ -6,7 +6,7 @@ import plotly.express as px
 # ---------- PAGE CONFIG ----------
 st.set_page_config(page_title="Financial Scenario Lab", layout="wide")
 st.title("💰 Financial Scenario Lab – Lego Edition 🧱")
-st.markdown("Built by Gabby – SDET‑tested, multi‑shock, custom headcount moves, cyberpunk colors")
+st.markdown("Built by Gabby – now with **realistic burn** and working heatmap")
 
 # ---------- CYBERPUNK COLOR THEME ----------
 COLORS = {
@@ -17,12 +17,13 @@ COLORS = {
     "warning": "#ffb800"
 }
 
-# ---------- SAFE MONTE CARLO (always returns floats) ----------
+# ---------- SAFE MONTE CARLO (returns floats) ----------
 @st.cache_data
 def safe_monte_carlo_runway(cash, net_burn_mean, n_sims=5000):
     if cash <= 0:
         return {"p10": 0.0, "p50": 0.0, "p90": 0.0}
     if net_burn_mean <= 0:
+        # Profitable startup -> runway capped at 60 months
         return {"p10": 60.0, "p50": 60.0, "p90": 60.0}
     burn_std = max(net_burn_mean * 0.2, 500)
     try:
@@ -38,19 +39,19 @@ def safe_monte_carlo_runway(cash, net_burn_mean, n_sims=5000):
     except Exception:
         return {"p10": 0.0, "p50": 0.0, "p90": 0.0}
 
-# ---------- GENERATE REALISTIC DATA (some startups lose money) ----------
+# ---------- GENERATE REALISTIC DATA (Nexus AI and FinPulse lose money) ----------
 @st.cache_data
 def generate_startup_data():
     np.random.seed(42)
     startups = ["Nexus AI", "FinPulse", "Medtronic AI", "Quantum Secure"]
-    # Realistic cash balances (some low, some high)
-    cash_balance = [350000, 120000, 880000, 280000]
-    # Fixed monthly costs (rent, salaries, servers)
+    # Cash balances
+    cash_balance = [420000, 180000, 950000, 310000]
+    # Fixed monthly costs (salaries, rent, servers)
     fixed_burn = [105000, 72000, 118000, 59000]
     var_burn_pct = [0.15, 0.10, 0.25, 0.12]
     headcount = [24, 15, 29, 12]
     # Revenue per head – make Nexus AI and FinPulse unprofitable
-    revenue_per_head = [10000, 11500, 9000, 18500]
+    revenue_per_head = [9000, 10000, 12000, 19000]  # lowered for first two
 
     df = pd.DataFrame({
         "startup": startups,
@@ -63,8 +64,7 @@ def generate_startup_data():
     df["total_monthly_burn"] = df["fixed_burn_monthly"] * (1 + df["var_burn_pct"])
     df["monthly_revenue"] = df["headcount"] * df["revenue_per_head"]
     df["net_burn"] = df["total_monthly_burn"] - df["monthly_revenue"]
-    # Ensure positive burn for Monte Carlo, but allow some to be profitable (negative burn becomes 0 for calculation)
-    df["net_burn_for_mc"] = df["net_burn"].clip(lower=500)
+    # Keep net burn as is (positive for losing startups, negative for profitable)
     return df
 
 # ---------- INITIALIZE DATA IN SESSION STATE ----------
@@ -73,12 +73,10 @@ if "df_startups" not in st.session_state:
     # Add Monte Carlo columns
     mc_results = []
     for _, row in df_raw.iterrows():
-        stats = safe_monte_carlo_runway(row["cash_balance"], row["net_burn_for_mc"])
+        stats = safe_monte_carlo_runway(row["cash_balance"], row["net_burn"])
         mc_results.append(stats)
     df_mc = pd.DataFrame(mc_results)
     df_startups = pd.concat([df_raw, df_mc], axis=1)
-    # Drop helper column
-    df_startups = df_startups.drop(columns=["net_burn_for_mc"])
     # Ensure numeric columns
     for col in ["p10", "p50", "p90"]:
         df_startups[col] = pd.to_numeric(df_startups[col], errors="coerce").fillna(0).astype(float)
@@ -92,19 +90,18 @@ if st.button("🔄 Reset to Original Data"):
     df_raw = generate_startup_data()
     mc_results = []
     for _, row in df_raw.iterrows():
-        stats = safe_monte_carlo_runway(row["cash_balance"], row["net_burn_for_mc"])
+        stats = safe_monte_carlo_runway(row["cash_balance"], row["net_burn"])
         mc_results.append(stats)
     df_mc = pd.DataFrame(mc_results)
     df_new = pd.concat([df_raw, df_mc], axis=1)
-    df_new = df_new.drop(columns=["net_burn_for_mc"])
     for col in ["p10", "p50", "p90"]:
         df_new[col] = pd.to_numeric(df_new[col], errors="coerce").fillna(0).astype(float)
     st.session_state.df_startups = df_new
     st.rerun()
 
-# ---------- SAFE RUNWAY CHART (Plotly Express – always works) ----------
+# ---------- SAFE RUNWAY CHART (Plotly Express) ----------
 def runway_chart(df, title="Runway (months)"):
-    """Robust horizontal bar chart – creates a clean DataFrame internally."""
+    """Robust horizontal bar chart."""
     # Extract only needed columns and ensure numeric p50
     chart_data = []
     for _, row in df.iterrows():
@@ -191,8 +188,7 @@ if st.button("▶ Simulate Move", type="primary"):
     # Recalculate runway for all startups
     new_p50 = []
     for _, row in df_new.iterrows():
-        net_burn_for_mc = max(row["net_burn"], 500)
-        stats = safe_monte_carlo_runway(row["cash_balance"], net_burn_for_mc)
+        stats = safe_monte_carlo_runway(row["cash_balance"], row["net_burn"])
         new_p50.append(stats["p50"])
     df_new["p50_new"] = new_p50
 
@@ -265,8 +261,7 @@ if st.button("⚡ Apply All Selected Shocks", type="primary") and selected_shock
     # Recalculate runway
     new_p50 = []
     for _, row in df_shock.iterrows():
-        net_burn_for_mc = max(row["net_burn"], 500)
-        stats = safe_monte_carlo_runway(row["cash_balance"], net_burn_for_mc)
+        stats = safe_monte_carlo_runway(row["cash_balance"], row["net_burn"])
         new_p50.append(stats["p50"])
     df_shock["p50_new"] = new_p50
     
@@ -283,12 +278,6 @@ if st.button("⚡ Apply All Selected Shocks", type="primary") and selected_shock
     df_after = df_shock.copy()
     df_after["p50"] = df_after["p50_new"]
     st.plotly_chart(runway_chart(df_after, title="Runway After Multiple Shocks"), use_container_width=True)
-    
-    # Optionally persist the shocked state (uncomment if desired)
-    # df_shock["p50"] = df_shock["p50_new"]
-    # df_shock = df_shock.drop(columns=["p50_new"])
-    # st.session_state.df_startups = df_shock
-    # st.rerun()
 
 # ---------- SECTION 4: CUSTOM INVESTMENT ----------
 st.header("💡 Custom Investment ROI")
@@ -302,58 +291,47 @@ with colI2:
 
 if inv_cost > 0 and st.button("Apply Investment"):
     row = df_startups[df_startups["startup"] == inv_target].iloc[0]
-    new_net = max(row["net_burn"] + inv_cost - inv_gain, 500)
+    new_net = row["net_burn"] + inv_cost - inv_gain
     stats = safe_monte_carlo_runway(row["cash_balance"], new_net)
     st.info(f"New runway for **{inv_target}**: {stats['p50']:.1f} months (was {row['p50']:.1f})")
     roi_pct = (inv_gain - inv_cost) / inv_cost
     st.metric("Monthly ROI", f"{roi_pct:.1%}")
 
-# ---------- SECTION 5: RUNWAY HEATMAP (Safe, without applymap) ----------
+# ---------- SECTION 5: RUNWAY HEATMAP (using st.dataframe with column_config) ----------
 st.header("🔥 Runway Heatmap (Red = Critical)")
-heatmap_data = []
-for _, row in df_startups.iterrows():
-    runway = row["p50"]
-    if runway < 6:
-        status = "Critical (<6 mo)"
-        color = "#ff2a6d"
-        text_color = "white"
-    elif runway < 12:
-        status = "Warning (6-12 mo)"
-        color = "#ffb800"
-        text_color = "black"
-    else:
-        status = "Safe"
-        color = "#05ffa1"
-        text_color = "black"
-    heatmap_data.append({
-        "Startup": row["startup"],
-        "Runway (months)": f"{runway:.1f}",
-        "Status": status,
-        "_color": color,
-        "_text_color": text_color
-    })
-heatmap_df = pd.DataFrame(heatmap_data)
-# Display as HTML to avoid pandas styling issues
-st.markdown(
-    heatmap_df.to_html(
-        index=False,
-        escape=False,
-        render_links=False,
-        formatters={
-            "Status": lambda x: x,
-            "Runway (months)": lambda x: x
-        }
-    ).replace(
-        '<td>', '<td style="'
-    ).replace(
-        'Critical (<6 mo)', f'<span style="background-color:#ff2a6d; color:white; padding:4px 8px; border-radius:12px">Critical (&lt;6 mo)</span>'
-    ).replace(
-        'Warning (6-12 mo)', f'<span style="background-color:#ffb800; color:black; padding:4px 8px; border-radius:12px">Warning (6-12 mo)</span>'
-    ).replace(
-        'Safe', f'<span style="background-color:#05ffa1; color:black; padding:4px 8px; border-radius:12px">Safe</span>'
-    ),
-    unsafe_allow_html=True
+
+# Prepare data for heatmap
+heatmap_df = df_startups[["startup", "p50"]].copy()
+heatmap_df["Runway (months)"] = heatmap_df["p50"].apply(lambda x: f"{x:.1f}")
+heatmap_df["Status"] = heatmap_df["p50"].apply(
+    lambda x: "Critical (<6 mo)" if x < 6 else "Warning (6-12 mo)" if x < 12 else "Safe"
 )
+heatmap_display = heatmap_df[["startup", "Runway (months)", "Status"]]
+
+# Use Streamlit's column_config to color the Status column
+st.dataframe(
+    heatmap_display,
+    column_config={
+        "startup": "Startup",
+        "Runway (months)": st.column_config.TextColumn("Runway (months)"),
+        "Status": st.column_config.TextColumn(
+            "Status",
+            help="Runway risk level",
+            width="medium",
+        )
+    },
+    use_container_width=True
+)
+
+# Manually add color hint (since column_config doesn't support direct background color in community version)
+# Instead, add a simple colored caption
+st.markdown(f"""
+<div style="background-color:#1e1e2f; padding:10px; border-radius:8px; margin-top:10px">
+<span style="background-color:#ff2a6d; color:white; padding:4px 12px; border-radius:20px">🔴 Critical (&lt;6 mo)</span>&nbsp;&nbsp;
+<span style="background-color:#ffb800; color:black; padding:4px 12px; border-radius:20px">🟠 Warning (6-12 mo)</span>&nbsp;&nbsp;
+<span style="background-color:#05ffa1; color:black; padding:4px 12px; border-radius:20px">🟢 Safe (&gt;12 mo)</span>
+</div>
+""", unsafe_allow_html=True)
 
 # ---------- FOOTER ----------
 st.divider()
