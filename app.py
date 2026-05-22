@@ -260,7 +260,17 @@ if inv_cost > 0 and st.button("Apply Investment"):
     st.info(f"New runway for **{inv_target}**: {new_run['p50']:.1f} months (was {row['p50']:.1f})")
     roi_pct = (inv_gain - inv_cost) / inv_cost
     st.metric("Monthly ROI", f"{roi_pct:.1%}")
-
+# ---------- EXTRA: RUNWAY HEATMAP (for presentation wow factor) ----------
+st.header("🔥 Runway Heatmap (Red = Critical)")
+heatmap_data = df_startups[["startup", "p50"]].copy()
+heatmap_data["status"] = heatmap_data["p50"].apply(lambda x: "Critical (<6 mo)" if x < 6 else "Warning (6-12 mo)" if x < 12 else "Safe")
+st.dataframe(
+    heatmap_data.style.applymap(
+        lambda x: "background-color: #ff2a6d; color: white" if x == "Critical (<6 mo)" else "background-color: #ffb800; color: black" if x == "Warning (6-12 mo)" else "background-color: #05ffa1; color: black",
+        subset=["status"]
+    ),
+    use_container_width=True
+)
 # ---------- FOOTER ----------
 st.divider()
 st.markdown("🧱 **Lego Mode** – Reliable horizontal bars, multi‑shock, custom headcount moves, and **zero errors**.")
