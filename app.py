@@ -7,7 +7,7 @@ import plotly.graph_objects as go
 # ---------- PAGE CONFIG ----------
 st.set_page_config(page_title="Financial Scenario Lab", layout="wide")
 st.title("💰 Financial Scenario Lab – Lego Edition 🧱")
-st.markdown("Built by Gabby – Monte Carlo + multi‑shock + custom headcount moves")
+st.markdown("Built by Gabby – now with **realistic burn** so shocks actually change runway")
 
 # ---------- CYBERPUNK COLOR THEME ----------
 COLORS = {
@@ -40,16 +40,20 @@ def safe_monte_carlo_runway(cash, net_burn_mean, n_sims=5000):
     except Exception:
         return {"p10": 0, "p50": 0, "p90": 0}
 
-# ---------- GENERATE SYNTHETIC DATA ----------
+# ---------- GENERATE REALISTIC DATA (MIX OF PROFIT/LOSS) ----------
 @st.cache_data
 def generate_startup_data():
     np.random.seed(42)
     startups = ["Nexus AI", "FinPulse", "Medtronic AI", "Quantum Secure"]
-    cash_balance = [850000, 420000, 1100000, 310000]
-    fixed_burn = [55000, 38000, 72000, 44000]
-    var_burn_pct = [0.12, 0.08, 0.20, 0.15]
-    headcount = [18, 12, 26, 9]
-    revenue_per_head = [15000, 18000, 12000, 22000]
+    # Realistic cash balances (some low, some high)
+    cash_balance = [420000, 180000, 950000, 310000]
+    # Fixed monthly costs (rent, salaries, servers)
+    fixed_burn = [95000, 68000, 112000, 54000]
+    # Variable costs as % of fixed
+    var_burn_pct = [0.15, 0.10, 0.25, 0.12]
+    headcount = [22, 14, 28, 11]
+    # Revenue per head – make some startups unprofitable
+    revenue_per_head = [11000, 13000, 8500, 19000]
 
     df = pd.DataFrame({
         "startup": startups,
@@ -62,7 +66,7 @@ def generate_startup_data():
     df["total_monthly_burn"] = df["fixed_burn_monthly"] * (1 + df["var_burn_pct"])
     df["monthly_revenue"] = df["headcount"] * df["revenue_per_head"]
     df["net_burn"] = df["total_monthly_burn"] - df["monthly_revenue"]
-    df["net_burn"] = df["net_burn"].clip(lower=500)
+    df["net_burn"] = df["net_burn"].clip(lower=500)  # ensure positive burn for Monte Carlo
     return df
 
 df_startups = generate_startup_data()
@@ -75,21 +79,30 @@ for _, row in df_startups.iterrows():
 df_runway = pd.DataFrame(runway_results)
 df_startups = pd.concat([df_startups, df_runway], axis=1)
 
-# ---------- LEGO BLOCK VISUALIZATION ----------
+# ---------- FIXED LEGO BLOCK VISUALIZATION ----------
 def lego_runway_chart(df, title="Runway (months)"):
-    """Create a horizontal bar chart that looks like Lego blocks"""
+    """Create a horizontal bar chart with proper numeric values"""
+    # Ensure we're working with numeric p50
+    df_plot = df.copy()
+    if "p50" not in df_plot.columns:
+        st.error("No 'p50' column found in data")
+        return go.Figure()
+    
+    # Convert to numeric, coercing errors
+    df_plot["p50"] = pd.to_numeric(df_plot["p50"], errors="coerce").fillna(0)
+    
     fig = go.Figure()
     colors = [COLORS["neon_blue"], COLORS["neon_purple"], COLORS["neon_pink"], "#00ffcc"]
-    for i, (_, row) in enumerate(df.iterrows()):
+    for i, (_, row) in enumerate(df_plot.iterrows()):
         fig.add_trace(go.Bar(
             y=[row["startup"]],
             x=[row["p50"]],
             orientation='h',
             marker=dict(color=colors[i % len(colors)], line=dict(color=COLORS["neon_blue"], width=2)),
-            text=f"{row['p50']} mo",
+            text=f"{row['p50']:.1f} mo",
             textposition='outside',
             name=row["startup"],
-            hovertemplate=f"{row['startup']}<br>Runway: {row['p50']} months<br>Best: {row['p90']} mo<br>Worst: {row['p10']} mo<extra></extra>"
+            hovertemplate=f"{row['startup']}<br>Runway: {row['p50']:.1f} months<br>Best: {row['p90']:.1f} mo<br>Worst: {row['p10']:.1f} mo<extra></extra>"
         ))
     fig.update_layout(
         title=title,
@@ -114,12 +127,14 @@ with col1:
 with col2:
     # Mini metric cards
     for _, row in df_startups.iterrows():
+        burn_status = "🔥 Burning" if row["net_burn"] > row["monthly_revenue"] else "✅ Profitable"
         st.markdown(f"""
         <div style="background:#1e1e2f; padding:10px; border-radius:10px; margin-bottom:10px; border-left: 4px solid {COLORS['neon_blue']}">
         <b style="color:{COLORS['neon_blue']}">{row['startup']}</b><br>
         💰 Cash: ${row['cash_balance']:,.0f}<br>
         🔥 Net burn: ${row['net_burn']:,.0f}/mo<br>
-        🧱 Runway: <b>{row['p50']} mo</b>
+        🧱 Runway: <b>{row['p50']:.1f} mo</b><br>
+        <span style="color:{COLORS['neon_pink']}">{burn_status}</span>
         </div>
         """, unsafe_allow_html=True)
 
@@ -190,7 +205,7 @@ if "shocks_list" not in st.session_state:
         {"name": "Tariffs → Manufacturing +15% cost", "affected_startup": "Medtronic AI", "revenue_multiplier": 0.85},
         {"name": "TikTok ban → Ad revenue -30%", "affected_startup": "Quantum Secure", "revenue_multiplier": 0.70},
         {"name": "Recession → VC funding pause", "affected_startup": "All", "revenue_multiplier": 0.90},
-        {"name": "Geopolitical conflict → Supply chain disruption", "affected_startup": "All", "revenue_multiplier": 0.75}  # Added example
+        {"name": "Geopolitical conflict → Supply chain disruption", "affected_startup": "All", "revenue_multiplier": 0.75}
     ]
 
 # Edit shocks interface
@@ -255,9 +270,10 @@ if st.button("⚡ Apply All Selected Shocks", type="primary") and selected_shock
     st.warning(f"⚠️ Applied {len(selected_shock_names)} shock(s): " + ", ".join(applied_shocks))
     
     # Show Lego chart after shocks
-    st.plotly_chart(lego_runway_chart(df_shock.rename(columns={"runway_after_shock": "p50"}), title="Runway After Multiple Shocks"), use_container_width=True)
+    df_after = df_shock.rename(columns={"runway_after_shock": "p50"})
+    st.plotly_chart(lego_runway_chart(df_after, title="Runway After Multiple Shocks"), use_container_width=True)
 
-# ---------- SECTION 4: CUSTOM INVESTMENT (unchanged but with colors) ----------
+# ---------- SECTION 4: CUSTOM INVESTMENT ----------
 st.header("💡 Custom Investment ROI")
 col_inv1, col_inv2 = st.columns(2)
 with col_inv1:
@@ -271,11 +287,11 @@ if inv_cost > 0 and st.button("Apply Investment"):
     row = df_startups[df_startups["startup"] == inv_startup].iloc[0]
     new_net = max(row["net_burn"] + inv_cost - inv_gain, 500)
     new_run = safe_monte_carlo_runway(row["cash_balance"], new_net)
-    st.info(f"New runway for **{inv_startup}**: {new_run['p50']} months (was {row['p50']})")
+    st.info(f"New runway for **{inv_startup}**: {new_run['p50']:.1f} months (was {row['p50']:.1f})")
     roi_pct = (inv_gain - inv_cost) / inv_cost
     st.metric("Monthly ROI", f"{roi_pct:.1%}")
 
 # ---------- FOOTER ----------
 st.divider()
-st.markdown("🧱 **Lego Mode** – Each block = 1 month of runway. Cyberpunk colors. Multi-shock ready.")
+st.markdown("🧱 **Lego Mode** – Each block = 1 month of runway. Now with **realistic burn rates** so shocks actually change the chart.")
 st.caption("To use real data, replace `generate_startup_data()` with your CSV or SQL connection.")
