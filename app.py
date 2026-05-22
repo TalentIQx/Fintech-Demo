@@ -2,11 +2,18 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import plotly.express as px
+from reportlab.lib.pagesizes import letter
+from reportlab.lib import colors
+from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+from reportlab.lib.units import inch
+import io
+from datetime import datetime
 
 # ---------- PAGE CONFIG ----------
 st.set_page_config(page_title="Financial Scenario Lab", layout="wide")
 st.title("💰 Financial Scenario Lab – Lego Edition 🧱")
-st.markdown("Built by Gabby – now with **realistic losing startups** so shocks change runway")
+st.markdown("Built by Gabby – with PDF report & multi‑shock")
 
 # ---------- CYBERPUNK COLOR THEME ----------
 COLORS = {
@@ -23,7 +30,6 @@ def safe_monte_carlo_runway(cash, net_burn_mean, n_sims=5000):
     if cash <= 0:
         return {"p10": 0.0, "p50": 0.0, "p90": 0.0}
     if net_burn_mean <= 0:
-        # Profitable startup: runway capped at 60 months
         return {"p10": 60.0, "p50": 60.0, "p90": 60.0}
     burn_std = max(net_burn_mean * 0.2, 500)
     try:
@@ -39,19 +45,16 @@ def safe_monte_carlo_runway(cash, net_burn_mean, n_sims=5000):
     except Exception:
         return {"p10": 0.0, "p50": 0.0, "p90": 0.0}
 
-# ---------- GENERATE DATA WITH REAL LOSSES ----------
+# ---------- GENERATE REALISTIC DATA ----------
 @st.cache_data
 def generate_startup_data():
     np.random.seed(42)
     startups = ["Nexus AI", "FinPulse", "Medtronic AI", "Quantum Secure"]
-    # Cash balances (some low to make runway finite)
     cash_balance = [350000, 150000, 900000, 300000]
-    # Fixed monthly costs (high enough to cause losses)
     fixed_burn = [120000, 85000, 110000, 60000]
     var_burn_pct = [0.20, 0.15, 0.25, 0.12]
     headcount = [28, 18, 30, 14]
-    # Revenue per head – deliberately low to ensure Nexus and FinPulse lose money
-    revenue_per_head = [8000, 9000, 13000, 20000]   # Nexus and FinPulse now unprofitable
+    revenue_per_head = [8000, 9000, 13000, 20000]
 
     df = pd.DataFrame({
         "startup": startups,
@@ -64,7 +67,6 @@ def generate_startup_data():
     df["total_monthly_burn"] = df["fixed_burn_monthly"] * (1 + df["var_burn_pct"])
     df["monthly_revenue"] = df["headcount"] * df["revenue_per_head"]
     df["net_burn"] = df["total_monthly_burn"] - df["monthly_revenue"]
-    # Keep net burn as is (positive for losers, negative for profitable)
     return df
 
 # ---------- INITIALIZE DATA ----------
@@ -79,6 +81,7 @@ if "df_startups" not in st.session_state:
     for col in ["p10", "p50", "p90"]:
         df_startups[col] = pd.to_numeric(df_startups[col], errors="coerce").fillna(0).astype(float)
     st.session_state.df_startups = df_startups
+    st.session_state.last_shocks = []
 
 df_startups = st.session_state.df_startups
 
@@ -95,6 +98,7 @@ if st.button("🔄 Reset to Original Data"):
     for col in ["p10", "p50", "p90"]:
         df_new[col] = pd.to_numeric(df_new[col], errors="coerce").fillna(0).astype(float)
     st.session_state.df_startups = df_new
+    st.session_state.last_shocks = []
     st.rerun()
 
 # ---------- SAFE RUNWAY CHART ----------
@@ -270,7 +274,8 @@ if st.button("⚡ Apply All Selected Shocks", type="primary") and selected_shock
     st.dataframe(result, use_container_width=True)
     st.warning(f"⚠️ Applied {len(selected_shock_names)} shock(s): " + ", ".join(applied))
     
-    # Show updated chart
+    st.session_state.last_shocks = applied
+    
     df_after = df_shock.copy()
     df_after["p50"] = df_after["p50_new"]
     st.plotly_chart(runway_chart(df_after, title="Runway After Multiple Shocks"), use_container_width=True)
@@ -302,7 +307,6 @@ heatmap_df["Status"] = heatmap_df["p50"].apply(
     lambda x: "Critical (<6 mo)" if x < 6 else "Warning (6-12 mo)" if x < 12 else "Safe"
 )
 heatmap_display = heatmap_df[["startup", "Runway (months)", "Status"]]
-
 st.dataframe(heatmap_display, use_container_width=True)
 
 st.markdown(f"""
@@ -313,7 +317,85 @@ st.markdown(f"""
 </div>
 """, unsafe_allow_html=True)
 
+# ---------- SECTION 6: PDF REPORT ----------
+st.header("📄 Generate PDF Report")
+st.markdown("Download a summary report of the current financial state (including any applied shocks).")
+
+def create_pdf_report(df, shocks_applied=None):
+    buffer = io.BytesIO()
+    doc = SimpleDocTemplate(buffer, pagesize=letter, title="Financial Scenario Report")
+    styles = getSampleStyleSheet()
+    title_style = styles['Title']
+    heading_style = styles['Heading2']
+    normal_style = styles['Normal']
+    
+    header_style = ParagraphStyle(
+        'Header',
+        parent=styles['Normal'],
+        fontName='Helvetica-Bold',
+        fontSize=10,
+        textColor=colors.white,
+        alignment=1
+    )
+    
+    story = []
+    story.append(Paragraph("Financial Scenario Lab – Runway Report", title_style))
+    story.append(Spacer(1, 0.2*inch))
+    story.append(Paragraph(f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}", normal_style))
+    story.append(Spacer(1, 0.3*inch))
+    
+    story.append(Paragraph("Current Runway & Financial Metrics", heading_style))
+    story.append(Spacer(1, 0.1*inch))
+    
+    table_data = [["Startup", "Cash ($)", "Net Burn ($/mo)", "Runway (months)", "Status"]]
+    for _, row in df.iterrows():
+        status = "Critical" if row["p50"] < 6 else "Warning" if row["p50"] < 12 else "Safe"
+        table_data.append([
+            row["startup"],
+            f"${row['cash_balance']:,.0f}",
+            f"${row['net_burn']:,.0f}",
+            f"{row['p50']:.1f}",
+            status
+        ])
+    
+    table = Table(table_data, colWidths=[1.2*inch, 1.2*inch, 1.2*inch, 1.0*inch, 1.0*inch])
+    table.setStyle(TableStyle([
+        ('BACKGROUND', (0,0), (-1,0), colors.HexColor("#00f3ff")),
+        ('TEXTCOLOR', (0,0), (-1,0), colors.black),
+        ('ALIGN', (0,0), (-1,-1), 'CENTER'),
+        ('FONTNAME', (0,0), (-1,0), 'Helvetica-Bold'),
+        ('FONTSIZE', (0,0), (-1,0), 10),
+        ('BOTTOMPADDING', (0,0), (-1,0), 8),
+        ('BACKGROUND', (0,1), (-1,-1), colors.HexColor("#1e1e2f")),
+        ('TEXTCOLOR', (0,1), (-1,-1), colors.white),
+        ('GRID', (0,0), (-1,-1), 0.5, colors.HexColor("#333333")),
+        ('FONTSIZE', (0,1), (-1,-1), 9),
+    ]))
+    story.append(table)
+    story.append(Spacer(1, 0.2*inch))
+    
+    if shocks_applied and len(shocks_applied) > 0:
+        story.append(Paragraph("Applied Shocks", heading_style))
+        story.append(Spacer(1, 0.1*inch))
+        shocks_text = ", ".join(shocks_applied)
+        story.append(Paragraph(shocks_text, normal_style))
+        story.append(Spacer(1, 0.2*inch))
+    
+    story.append(Paragraph("Report generated by Financial Scenario Lab – Lego Edition", styles['Italic']))
+    doc.build(story)
+    buffer.seek(0)
+    return buffer
+
+pdf_buffer = create_pdf_report(df_startups, shocks_applied=st.session_state.last_shocks)
+st.download_button(
+    label="📥 Download PDF Report",
+    data=pdf_buffer,
+    file_name=f"financial_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf",
+    mime="application/pdf",
+    use_container_width=True
+)
+
 # ---------- FOOTER ----------
 st.divider()
-st.markdown("🧱 **Lego Mode** – Now with **realistic net burn** (Nexus AI and FinPulse lose money). Shocks will reduce runway. Use Reset to start over.")
+st.markdown("🧱 **Lego Mode** – PDF report includes current data and applied shocks. Use Reset to start over.")
 st.caption("To use real data, replace `generate_startup_data()` with your CSV or SQL connection.")
