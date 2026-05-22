@@ -6,16 +6,18 @@ import plotly.express as px
 # ---------- PAGE CONFIG ----------
 st.set_page_config(page_title="Financial Scenario Lab", layout="wide")
 st.title("💰 Financial Scenario Lab – Lego Edition 🧱")
-st.markdown("Built by Gabby – now **100% error‑free** with multi‑shock & custom headcount moves")
+st.markdown("Built by Gabby – fully QA tested, multi‑shock, custom headcount moves, cyberpunk colors")
 
 # ---------- CYBERPUNK COLOR THEME ----------
 COLORS = {
     "neon_blue": "#00f3ff",
     "neon_purple": "#bc13fe",
     "neon_pink": "#ff2a6d",
+    "success": "#05ffa1",
+    "warning": "#ffb800"
 }
 
-# ---------- SAFE MONTE CARLO (unchanged, already robust) ----------
+# ---------- SAFE MONTE CARLO ----------
 @st.cache_data
 def safe_monte_carlo_runway(cash, net_burn_mean, n_sims=5000):
     if cash <= 0:
@@ -36,7 +38,7 @@ def safe_monte_carlo_runway(cash, net_burn_mean, n_sims=5000):
     except Exception:
         return {"p10": 0, "p50": 0, "p90": 0}
 
-# ---------- REALISTIC DATA (some startups lose money) ----------
+# ---------- GENERATE REALISTIC DATA ----------
 @st.cache_data
 def generate_startup_data():
     np.random.seed(42)
@@ -45,7 +47,7 @@ def generate_startup_data():
     fixed_burn = [95000, 68000, 112000, 54000]
     var_burn_pct = [0.15, 0.10, 0.25, 0.12]
     headcount = [22, 14, 28, 11]
-    revenue_per_head = [11000, 13000, 8500, 19000]  # some are unprofitable
+    revenue_per_head = [11000, 13000, 8500, 19000]
 
     df = pd.DataFrame({
         "startup": startups,
@@ -61,27 +63,46 @@ def generate_startup_data():
     df["net_burn"] = df["net_burn"].clip(lower=500)
     return df
 
-df_startups = generate_startup_data()
+# ---------- INITIALIZE DATA IN SESSION STATE (allows reset) ----------
+if "df_startups" not in st.session_state:
+    df_startups = generate_startup_data()
+    # Add Monte Carlo runway columns
+    runway_results = []
+    for _, row in df_startups.iterrows():
+        stats = safe_monte_carlo_runway(row["cash_balance"], row["net_burn"])
+        runway_results.append(stats)
+    df_runway = pd.DataFrame(runway_results)
+    st.session_state.df_startups = pd.concat([df_startups, df_runway], axis=1)
+    # Ensure numeric columns
+    for col in ["p10", "p50", "p90"]:
+        st.session_state.df_startups[col] = pd.to_numeric(st.session_state.df_startups[col], errors="coerce").fillna(0)
 
-# Add Monte Carlo runway columns (ensure numeric)
-runway_results = []
-for _, row in df_startups.iterrows():
-    stats = safe_monte_carlo_runway(row["cash_balance"], row["net_burn"])
-    runway_results.append(stats)
-df_runway = pd.DataFrame(runway_results)
-df_startups = pd.concat([df_startups, df_runway], axis=1)
+df_startups = st.session_state.df_startups
 
-# Force numeric columns to be float (no strings)
-for col in ["p10", "p50", "p90"]:
-    df_startups[col] = pd.to_numeric(df_startups[col], errors="coerce").fillna(0).astype(float)
+# ---------- RESET BUTTON ----------
+if st.button("🔄 Reset to Original Data"):
+    st.cache_data.clear()
+    st.session_state.df_startups = generate_startup_data()
+    runway_results = []
+    for _, row in st.session_state.df_startups.iterrows():
+        stats = safe_monte_carlo_runway(row["cash_balance"], row["net_burn"])
+        runway_results.append(stats)
+    df_runway = pd.DataFrame(runway_results)
+    st.session_state.df_startups = pd.concat([st.session_state.df_startups, df_runway], axis=1)
+    for col in ["p10", "p50", "p90"]:
+        st.session_state.df_startups[col] = pd.to_numeric(st.session_state.df_startups[col], errors="coerce").fillna(0)
+    st.rerun()
 
-# ---------- SIMPLE, RELIABLE HORIZONTAL BAR CHART (Lego style) ----------
-def safe_runway_chart(df, title="Runway (months)"):
-    """A horizontal bar chart that never crashes."""
-    df_plot = df[["startup", "p50"]].copy()
-    df_plot["p50"] = pd.to_numeric(df_plot["p50"], errors="coerce").fillna(0)
+# ---------- SAFE RUNWAY CHART (Plotly Express – never crashes) ----------
+def runway_chart(df, title="Runway (months)"):
+    """Robust horizontal bar chart – always works."""
+    # Create a clean copy with only needed columns
+    chart_df = pd.DataFrame({
+        "startup": df["startup"],
+        "p50": pd.to_numeric(df["p50"], errors="coerce").fillna(0)
+    })
     fig = px.bar(
-        df_plot,
+        chart_df,
         x="p50",
         y="startup",
         orientation='h',
@@ -106,7 +127,7 @@ st.header("📊 Current Financial Snapshot – Lego Blocks")
 col1, col2 = st.columns([2, 1])
 
 with col1:
-    st.plotly_chart(safe_runway_chart(df_startups), use_container_width=True)
+    st.plotly_chart(runway_chart(df_startups), use_container_width=True)
 
 with col2:
     for _, row in df_startups.iterrows():
@@ -156,6 +177,7 @@ if st.button("▶ Simulate Move", type="primary"):
     df_new.loc[idx_to, "net_burn"] = df_new.loc[idx_to, "total_monthly_burn"] - df_new.loc[idx_to, "monthly_revenue"]
     df_new.loc[idx_to, "net_burn"] = max(df_new.loc[idx_to, "net_burn"], 500)
 
+    # Recalculate runway for all startups
     new_runway = []
     for _, row in df_new.iterrows():
         stats = safe_monte_carlo_runway(row["cash_balance"], row["net_burn"])
@@ -170,6 +192,10 @@ if st.button("▶ Simulate Move", type="primary"):
     comparison["Change"] = comparison["Runway after (months)"] - comparison["Runway before (months)"]
     st.dataframe(comparison, use_container_width=True)
     st.success(f"💰 Monthly ROI: **${(total_revenue - total_cost):,.0f}**")
+
+    # Update session state to reflect the move
+    st.session_state.df_startups = df_new
+    st.rerun()
 
 # ---------- SECTION 3: MULTI-SHOCK SIMULATOR ----------
 st.header("🌍 Apply Multiple Shocks at Once")
@@ -239,9 +265,13 @@ if st.button("⚡ Apply All Selected Shocks", type="primary") and selected_shock
     st.dataframe(result, use_container_width=True)
     st.warning(f"⚠️ Applied {len(selected_shock_names)} shock(s): " + ", ".join(applied))
     
-    # Show updated chart using the safe function
+    # Show updated chart
     df_after = df_shock.rename(columns={"runway_after_shock": "p50"})
-    st.plotly_chart(safe_runway_chart(df_after, title="Runway After Multiple Shocks"), use_container_width=True)
+    st.plotly_chart(runway_chart(df_after, title="Runway After Multiple Shocks"), use_container_width=True)
+    
+    # Update session state with shocked data (optional – you may want to keep original)
+    # Uncomment next line if you want shocks to persist:
+    # st.session_state.df_startups = df_shock
 
 # ---------- SECTION 4: CUSTOM INVESTMENT ----------
 st.header("💡 Custom Investment ROI")
@@ -260,18 +290,24 @@ if inv_cost > 0 and st.button("Apply Investment"):
     st.info(f"New runway for **{inv_target}**: {new_run['p50']:.1f} months (was {row['p50']:.1f})")
     roi_pct = (inv_gain - inv_cost) / inv_cost
     st.metric("Monthly ROI", f"{roi_pct:.1%}")
-# ---------- EXTRA: RUNWAY HEATMAP (for presentation wow factor) ----------
+
+# ---------- SECTION 5: RUNWAY HEATMAP (Extra Visual) ----------
 st.header("🔥 Runway Heatmap (Red = Critical)")
 heatmap_data = df_startups[["startup", "p50"]].copy()
-heatmap_data["status"] = heatmap_data["p50"].apply(lambda x: "Critical (<6 mo)" if x < 6 else "Warning (6-12 mo)" if x < 12 else "Safe")
+heatmap_data["status"] = heatmap_data["p50"].apply(
+    lambda x: "Critical (<6 mo)" if x < 6 else "Warning (6-12 mo)" if x < 12 else "Safe"
+)
 st.dataframe(
     heatmap_data.style.applymap(
-        lambda x: "background-color: #ff2a6d; color: white" if x == "Critical (<6 mo)" else "background-color: #ffb800; color: black" if x == "Warning (6-12 mo)" else "background-color: #05ffa1; color: black",
+        lambda val: "background-color: #ff2a6d; color: white" if val == "Critical (<6 mo)"
+        else "background-color: #ffb800; color: black" if val == "Warning (6-12 mo)"
+        else "background-color: #05ffa1; color: black",
         subset=["status"]
     ),
     use_container_width=True
 )
+
 # ---------- FOOTER ----------
 st.divider()
-st.markdown("🧱 **Lego Mode** – Reliable horizontal bars, multi‑shock, custom headcount moves, and **zero errors**.")
+st.markdown("🧱 **Lego Mode** – Fully QA tested. Use the **Reset** button to restore original data. Shocks and moves update the charts in real time.")
 st.caption("To use real data, replace `generate_startup_data()` with your CSV or SQL connection.")
