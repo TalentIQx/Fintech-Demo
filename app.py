@@ -13,7 +13,7 @@ from datetime import datetime
 # ---------- PAGE CONFIG ----------
 st.set_page_config(page_title="Financial Scenario Lab", layout="wide")
 st.title("💰 Financial Scenario Lab – Lego Edition 🧱")
-st.markdown("Built by Gabby – with PDF report & multi‑shock")
+st.markdown("Built by Gabby – with sensitivity slider & PDF report")
 
 # ---------- CYBERPUNK COLOR THEME ----------
 COLORS = {
@@ -280,6 +280,66 @@ if st.button("⚡ Apply All Selected Shocks", type="primary") and selected_shock
     df_after["p50"] = df_after["p50_new"]
     st.plotly_chart(runway_chart(df_after, title="Runway After Multiple Shocks"), use_container_width=True)
 
+# ---------- SECTION 3.5: SENSITIVITY ANALYSIS (NEW) ----------
+st.header("📊 Sensitivity Analysis – Test Any Shock Severity")
+st.markdown("Pick a shock, slide the multiplier (0.3 = 70% revenue loss, 1.0 = no loss), and see the impact **without changing your saved shocks**.")
+
+# Choose a shock to test
+sensitivity_shock_names = list(shock_options.keys())
+if sensitivity_shock_names:
+    test_shock_name = st.selectbox("Select shock to test:", sensitivity_shock_names, key="sensitivity_shock")
+    test_shock = shock_options[test_shock_name]
+    
+    # Slider for multiplier (0.3 to 1.0)
+    test_multiplier = st.slider(
+        "Revenue multiplier (lower = more severe)",
+        min_value=0.3,
+        max_value=1.0,
+        value=float(test_shock["revenue_multiplier"]),
+        step=0.05,
+        key="sensitivity_multiplier"
+    )
+    
+    if st.button("🔬 Test This Severity", type="secondary"):
+        # Create a copy of current data
+        df_test = df_startups.copy()
+        
+        # Apply the selected shock with the test multiplier
+        if test_shock["affected_startup"] == "All":
+            df_test["monthly_revenue"] *= test_multiplier
+        else:
+            idx = df_test[df_test["startup"] == test_shock["affected_startup"]].index[0]
+            df_test.loc[idx, "monthly_revenue"] *= test_multiplier
+        
+        df_test["net_burn"] = df_test["total_monthly_burn"] - df_test["monthly_revenue"]
+        
+        # Recalculate runway
+        new_p50 = []
+        for _, row in df_test.iterrows():
+            stats = safe_monte_carlo_runway(row["cash_balance"], row["net_burn"])
+            new_p50.append(stats["p50"])
+        df_test["p50_new"] = new_p50
+        
+        # Show results
+        result_test = pd.DataFrame({
+            "Startup": df_test["startup"],
+            "Runway before (months)": df_test["p50"],
+            "Runway after shock (months)": df_test["p50_new"],
+            "Net burn before ($)": df_startups["net_burn"],
+            "Net burn after ($)": df_test["net_burn"]
+        })
+        result_test["Change"] = result_test["Runway after shock (months)"] - result_test["Runway before (months)"]
+        st.dataframe(result_test, use_container_width=True)
+        
+        # Show chart
+        df_test_chart = df_test.copy()
+        df_test_chart["p50"] = df_test_chart["p50_new"]
+        st.plotly_chart(runway_chart(df_test_chart, title=f"Runway After {test_shock_name} (multiplier = {test_multiplier})"), use_container_width=True)
+        
+        st.caption(f"✅ This is a preview – your original data remains unchanged. To make this permanent, edit the shock in the section above.")
+else:
+    st.info("No shocks available. Add a shock using the ✏️ Edit section above.")
+
 # ---------- SECTION 4: CUSTOM INVESTMENT ----------
 st.header("💡 Custom Investment ROI")
 colI1, colI2 = st.columns(2)
@@ -397,5 +457,5 @@ st.download_button(
 
 # ---------- FOOTER ----------
 st.divider()
-st.markdown("🧱 **Lego Mode** – PDF report includes current data and applied shocks. Use Reset to start over.")
+st.markdown("🧱 **Lego Mode** – Use the **Sensitivity Analysis** slider to test different severities. PDF report includes current data and applied shocks.")
 st.caption("To use real data, replace `generate_startup_data()` with your CSV or SQL connection.")
