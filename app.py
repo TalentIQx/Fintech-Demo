@@ -13,7 +13,7 @@ from datetime import datetime
 # ---------- PAGE CONFIG ----------
 st.set_page_config(page_title="Financial Scenario Lab", layout="wide")
 st.title("💰 Financial Scenario Lab – Lego Edition 🧱")
-st.markdown("Built by Gabby – with sensitivity slider & PDF report")
+st.markdown("Built by Gabby – role‑based moves, multi‑shock, sensitivity slider, PDF report")
 
 # ---------- CYBERPUNK COLOR THEME ----------
 COLORS = {
@@ -82,6 +82,16 @@ if "df_startups" not in st.session_state:
         df_startups[col] = pd.to_numeric(df_startups[col], errors="coerce").fillna(0).astype(float)
     st.session_state.df_startups = df_startups
     st.session_state.last_shocks = []
+
+# Initialize role templates (editable)
+if "role_templates" not in st.session_state:
+    st.session_state.role_templates = {
+        "Junior Engineer": {"cost": 8000, "revenue": 6000},
+        "Senior Engineer": {"cost": 15000, "revenue": 18000},
+        "Data Scientist": {"cost": 12000, "revenue": 15000},
+        "AI Engineer": {"cost": 18000, "revenue": 25000},
+        "Salesperson": {"cost": 10000, "revenue": 40000}
+    }
 
 df_startups = st.session_state.df_startups
 
@@ -152,45 +162,90 @@ with col2:
         </div>
         """, unsafe_allow_html=True)
 
-# ---------- SECTION 2: MOVE EMPLOYEES ----------
-st.header("🔄 Move Multiple Employees (Custom Salaries)")
-colA, colB, colC, colD = st.columns(4)
+# ---------- SECTION 2: MOVE EMPLOYEES BY ROLE ----------
+st.header("🔄 Move Employees by Role (Custom Cost & Revenue per Role)")
+
+# Allow user to edit role templates
+with st.expander("✏️ Edit Role Templates (cost & revenue per month)"):
+    roles_to_remove = []
+    for role in list(st.session_state.role_templates.keys()):
+        col1, col2, col3, col4 = st.columns([2, 1, 1, 0.5])
+        with col1:
+            new_name = st.text_input("Role name", role, key=f"role_name_{role}")
+        with col2:
+            new_cost = st.number_input("Monthly cost ($)", value=st.session_state.role_templates[role]["cost"], step=500, key=f"role_cost_{role}")
+        with col3:
+            new_rev = st.number_input("Monthly revenue ($)", value=st.session_state.role_templates[role]["revenue"], step=500, key=f"role_rev_{role}")
+        with col4:
+            if st.button("🗑️", key=f"del_role_{role}"):
+                roles_to_remove.append(role)
+        if new_name != role:
+            st.session_state.role_templates[new_name] = {"cost": new_cost, "revenue": new_rev}
+            del st.session_state.role_templates[role]
+        else:
+            st.session_state.role_templates[role] = {"cost": new_cost, "revenue": new_rev}
+        st.divider()
+    for role in roles_to_remove:
+        del st.session_state.role_templates[role]
+        st.rerun()
+    if st.button("➕ Add new role"):
+        st.session_state.role_templates["New Role"] = {"cost": 10000, "revenue": 15000}
+        st.rerun()
+
+colA, colB = st.columns(2)
 with colA:
-    startup_from = st.selectbox("Move from:", df_startups["startup"].unique(), key="from")
+    startup_from = st.selectbox("Move from:", df_startups["startup"].unique(), key="from_role")
 with colB:
     options_to = [s for s in df_startups["startup"].unique() if s != startup_from]
-    startup_to = st.selectbox("Move to:", options_to, key="to")
-with colC:
-    num_employees = st.number_input("Number to move", min_value=1, max_value=20, value=1, step=1)
-with colD:
-    cost_per_employee = st.number_input("Cost per employee ($/mo)", min_value=0, value=8000, step=1000)
-    revenue_per_employee = st.number_input("Revenue per employee ($/mo)", min_value=0, value=12000, step=1000)
+    startup_to = st.selectbox("Move to:", options_to, key="to_role")
 
-if st.button("▶ Simulate Move", type="primary"):
+st.subheader("Select how many of each role to move")
+role_quantities = {}
+total_cost_move = 0
+total_revenue_move = 0
+
+for role, template in st.session_state.role_templates.items():
+    col1, col2, col3 = st.columns([2, 1, 1])
+    with col1:
+        qty = st.number_input(f"{role}", min_value=0, max_value=20, value=0, step=1, key=f"qty_{role}")
+    with col2:
+        st.write(f"Cost: ${template['cost']:,.0f}/mo")
+    with col3:
+        st.write(f"Revenue: ${template['revenue']:,.0f}/mo")
+    role_quantities[role] = qty
+    total_cost_move += qty * template["cost"]
+    total_revenue_move += qty * template["revenue"]
+
+st.markdown(f"**Total monthly cost of moved employees:** ${total_cost_move:,.0f}")
+st.markdown(f"**Total monthly revenue of moved employees:** ${total_revenue_move:,.0f}")
+st.markdown(f"**Net monthly ROI of move:** ${total_revenue_move - total_cost_move:,.0f}")
+
+if st.button("▶ Simulate Move by Role", type="primary") and (total_cost_move > 0 or total_revenue_move > 0):
     df_new = df_startups.copy()
-    total_cost = num_employees * cost_per_employee
-    total_revenue = num_employees * revenue_per_employee
-
+    
+    # Remove from source
     idx_from = df_new[df_new["startup"] == startup_from].index[0]
-    df_new.loc[idx_from, "headcount"] -= num_employees
-    df_new.loc[idx_from, "monthly_revenue"] -= total_revenue
-    df_new.loc[idx_from, "fixed_burn_monthly"] -= total_cost
+    df_new.loc[idx_from, "headcount"] -= sum(role_quantities.values())
+    df_new.loc[idx_from, "monthly_revenue"] -= total_revenue_move
+    df_new.loc[idx_from, "fixed_burn_monthly"] -= total_cost_move
     df_new.loc[idx_from, "total_monthly_burn"] = df_new.loc[idx_from, "fixed_burn_monthly"] * (1 + df_new.loc[idx_from, "var_burn_pct"])
     df_new.loc[idx_from, "net_burn"] = df_new.loc[idx_from, "total_monthly_burn"] - df_new.loc[idx_from, "monthly_revenue"]
-
+    
+    # Add to target
     idx_to = df_new[df_new["startup"] == startup_to].index[0]
-    df_new.loc[idx_to, "headcount"] += num_employees
-    df_new.loc[idx_to, "monthly_revenue"] += total_revenue
-    df_new.loc[idx_to, "fixed_burn_monthly"] += total_cost
+    df_new.loc[idx_to, "headcount"] += sum(role_quantities.values())
+    df_new.loc[idx_to, "monthly_revenue"] += total_revenue_move
+    df_new.loc[idx_to, "fixed_burn_monthly"] += total_cost_move
     df_new.loc[idx_to, "total_monthly_burn"] = df_new.loc[idx_to, "fixed_burn_monthly"] * (1 + df_new.loc[idx_to, "var_burn_pct"])
     df_new.loc[idx_to, "net_burn"] = df_new.loc[idx_to, "total_monthly_burn"] - df_new.loc[idx_to, "monthly_revenue"]
-
+    
+    # Recalculate runway
     new_p50 = []
     for _, row in df_new.iterrows():
-        stats = safe_monte_carlo_runway(row["cash_balance"], row["net_burn"])
+        stats = safe_monte_carlo_runway(row["cash_balance"], max(row["net_burn"], 500))
         new_p50.append(stats["p50"])
     df_new["p50_new"] = new_p50
-
+    
     comparison = pd.DataFrame({
         "Startup": df_new["startup"],
         "Runway before (months)": df_new["p50"],
@@ -198,8 +253,9 @@ if st.button("▶ Simulate Move", type="primary"):
     })
     comparison["Change"] = comparison["Runway after (months)"] - comparison["Runway before (months)"]
     st.dataframe(comparison, use_container_width=True)
-    st.success(f"💰 Monthly ROI: **${(total_revenue - total_cost):,.0f}**")
-
+    st.success(f"💰 Net monthly ROI of this move: **${total_revenue_move - total_cost_move:,.0f}**")
+    
+    # Update session state
     df_new["p50"] = df_new["p50_new"]
     df_new = df_new.drop(columns=["p50_new"])
     st.session_state.df_startups = df_new
@@ -259,7 +315,7 @@ if st.button("⚡ Apply All Selected Shocks", type="primary") and selected_shock
     
     new_p50 = []
     for _, row in df_shock.iterrows():
-        stats = safe_monte_carlo_runway(row["cash_balance"], row["net_burn"])
+        stats = safe_monte_carlo_runway(row["cash_balance"], max(row["net_burn"], 500))
         new_p50.append(stats["p50"])
     df_shock["p50_new"] = new_p50
     
@@ -280,17 +336,13 @@ if st.button("⚡ Apply All Selected Shocks", type="primary") and selected_shock
     df_after["p50"] = df_after["p50_new"]
     st.plotly_chart(runway_chart(df_after, title="Runway After Multiple Shocks"), use_container_width=True)
 
-# ---------- SECTION 3.5: SENSITIVITY ANALYSIS (NEW) ----------
+# ---------- SECTION 3.5: SENSITIVITY ANALYSIS ----------
 st.header("📊 Sensitivity Analysis – Test Any Shock Severity")
 st.markdown("Pick a shock, slide the multiplier (0.3 = 70% revenue loss, 1.0 = no loss), and see the impact **without changing your saved shocks**.")
 
-# Choose a shock to test
-sensitivity_shock_names = list(shock_options.keys())
-if sensitivity_shock_names:
-    test_shock_name = st.selectbox("Select shock to test:", sensitivity_shock_names, key="sensitivity_shock")
+if len(shock_options) > 0:
+    test_shock_name = st.selectbox("Select shock to test:", list(shock_options.keys()), key="sensitivity_shock")
     test_shock = shock_options[test_shock_name]
-    
-    # Slider for multiplier (0.3 to 1.0)
     test_multiplier = st.slider(
         "Revenue multiplier (lower = more severe)",
         min_value=0.3,
@@ -301,26 +353,20 @@ if sensitivity_shock_names:
     )
     
     if st.button("🔬 Test This Severity", type="secondary"):
-        # Create a copy of current data
         df_test = df_startups.copy()
-        
-        # Apply the selected shock with the test multiplier
         if test_shock["affected_startup"] == "All":
             df_test["monthly_revenue"] *= test_multiplier
         else:
             idx = df_test[df_test["startup"] == test_shock["affected_startup"]].index[0]
             df_test.loc[idx, "monthly_revenue"] *= test_multiplier
-        
         df_test["net_burn"] = df_test["total_monthly_burn"] - df_test["monthly_revenue"]
         
-        # Recalculate runway
         new_p50 = []
         for _, row in df_test.iterrows():
-            stats = safe_monte_carlo_runway(row["cash_balance"], row["net_burn"])
+            stats = safe_monte_carlo_runway(row["cash_balance"], max(row["net_burn"], 500))
             new_p50.append(stats["p50"])
         df_test["p50_new"] = new_p50
         
-        # Show results
         result_test = pd.DataFrame({
             "Startup": df_test["startup"],
             "Runway before (months)": df_test["p50"],
@@ -331,12 +377,10 @@ if sensitivity_shock_names:
         result_test["Change"] = result_test["Runway after shock (months)"] - result_test["Runway before (months)"]
         st.dataframe(result_test, use_container_width=True)
         
-        # Show chart
         df_test_chart = df_test.copy()
         df_test_chart["p50"] = df_test_chart["p50_new"]
         st.plotly_chart(runway_chart(df_test_chart, title=f"Runway After {test_shock_name} (multiplier = {test_multiplier})"), use_container_width=True)
-        
-        st.caption(f"✅ This is a preview – your original data remains unchanged. To make this permanent, edit the shock in the section above.")
+        st.caption("✅ This is a preview – your original data remains unchanged. To make this permanent, edit the shock in the section above.")
 else:
     st.info("No shocks available. Add a shock using the ✏️ Edit section above.")
 
@@ -353,22 +397,19 @@ with colI2:
 if inv_cost > 0 and st.button("Apply Investment"):
     row = df_startups[df_startups["startup"] == inv_target].iloc[0]
     new_net = row["net_burn"] + inv_cost - inv_gain
-    stats = safe_monte_carlo_runway(row["cash_balance"], new_net)
+    stats = safe_monte_carlo_runway(row["cash_balance"], max(new_net, 500))
     st.info(f"New runway for **{inv_target}**: {stats['p50']:.1f} months (was {row['p50']:.1f})")
     roi_pct = (inv_gain - inv_cost) / inv_cost
     st.metric("Monthly ROI", f"{roi_pct:.1%}")
 
 # ---------- SECTION 5: RUNWAY HEATMAP ----------
 st.header("🔥 Runway Heatmap (Red = Critical)")
-
 heatmap_df = df_startups[["startup", "p50"]].copy()
 heatmap_df["Runway (months)"] = heatmap_df["p50"].apply(lambda x: f"{x:.1f}")
 heatmap_df["Status"] = heatmap_df["p50"].apply(
     lambda x: "Critical (<6 mo)" if x < 6 else "Warning (6-12 mo)" if x < 12 else "Safe"
 )
-heatmap_display = heatmap_df[["startup", "Runway (months)", "Status"]]
-st.dataframe(heatmap_display, use_container_width=True)
-
+st.dataframe(heatmap_df[["startup", "Runway (months)", "Status"]], use_container_width=True)
 st.markdown(f"""
 <div style="background-color:#1e1e2f; padding:10px; border-radius:8px; margin-top:10px">
 <span style="background-color:#ff2a6d; color:white; padding:4px 12px; border-radius:20px">🔴 Critical (&lt;6 mo)</span>&nbsp;&nbsp;
@@ -388,15 +429,6 @@ def create_pdf_report(df, shocks_applied=None):
     title_style = styles['Title']
     heading_style = styles['Heading2']
     normal_style = styles['Normal']
-    
-    header_style = ParagraphStyle(
-        'Header',
-        parent=styles['Normal'],
-        fontName='Helvetica-Bold',
-        fontSize=10,
-        textColor=colors.white,
-        alignment=1
-    )
     
     story = []
     story.append(Paragraph("Financial Scenario Lab – Runway Report", title_style))
@@ -457,5 +489,5 @@ st.download_button(
 
 # ---------- FOOTER ----------
 st.divider()
-st.markdown("🧱 **Lego Mode** – Use the **Sensitivity Analysis** slider to test different severities. PDF report includes current data and applied shocks.")
+st.markdown("🧱 **Lego Mode** – Edit role costs/revenues, test shock severity with the slider, and download PDF reports.")
 st.caption("To use real data, replace `generate_startup_data()` with your CSV or SQL connection.")
