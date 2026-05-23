@@ -163,104 +163,122 @@ with col2:
         """, unsafe_allow_html=True)
 
 # ---------- SECTION 2: MOVE EMPLOYEES BY ROLE ----------
-st.header("🔄 Move Employees by Role (Custom Cost & Revenue per Role)")
+# ---------- SECTION 2: MOVE EMPLOYEES TO MULTIPLE DESTINATIONS ----------
+st.header("🔄 Move Employees to One or Two Receiving Companies")
+st.markdown("Move employees from a single source to up to two different startups. All numbers are monthly.")
 
-# Allow user to edit role templates
-with st.expander("✏️ Edit Role Templates (cost & revenue per month)"):
-    roles_to_remove = []
-    for role in list(st.session_state.role_templates.keys()):
-        col1, col2, col3, col4 = st.columns([2, 1, 1, 0.5])
-        with col1:
-            new_name = st.text_input("Role name", role, key=f"role_name_{role}")
-        with col2:
-            new_cost = st.number_input("Monthly cost ($)", value=st.session_state.role_templates[role]["cost"], step=500, key=f"role_cost_{role}")
-        with col3:
-            new_rev = st.number_input("Monthly revenue ($)", value=st.session_state.role_templates[role]["revenue"], step=500, key=f"role_rev_{role}")
-        with col4:
-            if st.button("🗑️", key=f"del_role_{role}"):
-                roles_to_remove.append(role)
-        if new_name != role:
-            st.session_state.role_templates[new_name] = {"cost": new_cost, "revenue": new_rev}
-            del st.session_state.role_templates[role]
-        else:
-            st.session_state.role_templates[role] = {"cost": new_cost, "revenue": new_rev}
-        st.divider()
-    for role in roles_to_remove:
-        del st.session_state.role_templates[role]
-        st.rerun()
-    if st.button("➕ Add new role"):
-        st.session_state.role_templates["New Role"] = {"cost": 10000, "revenue": 15000}
-        st.rerun()
+# Source selection
+source_company = st.selectbox("Move FROM (source):", df_startups["startup"].unique(), key="source_multi")
 
-colA, colB = st.columns(2)
-with colA:
-    startup_from = st.selectbox("Move from:", df_startups["startup"].unique(), key="from_role")
-with colB:
-    options_to = [s for s in df_startups["startup"].unique() if s != startup_from]
-    startup_to = st.selectbox("Move to:", options_to, key="to_role")
+# Get list of possible receivers (all except source)
+receiver_options = [s for s in df_startups["startup"].unique() if s != source_company]
 
-st.subheader("Select how many of each role to move")
-role_quantities = {}
-total_cost_move = 0
-total_revenue_move = 0
+# Choose number of receivers (1 or 2)
+num_receivers = st.radio("How many receiving companies?", [1, 2], horizontal=True, key="num_receivers")
 
-for role, template in st.session_state.role_templates.items():
-    col1, col2, col3 = st.columns([2, 1, 1])
+receivers = []
+receivers_data = []
+
+if num_receivers == 1:
+    col1, col2 = st.columns(2)
     with col1:
-        qty = st.number_input(f"{role}", min_value=0, max_value=20, value=0, step=1, key=f"qty_{role}")
+        rec1 = st.selectbox("Move TO (receiver):", receiver_options, key="rec1")
+    receivers = [rec1]
+    # Collect data for one receiver
     with col2:
-        st.write(f"Cost: ${template['cost']:,.0f}/mo")
-    with col3:
-        st.write(f"Revenue: ${template['revenue']:,.0f}/mo")
-    role_quantities[role] = qty
-    total_cost_move += qty * template["cost"]
-    total_revenue_move += qty * template["revenue"]
+        qty1 = st.number_input(f"Employees to {rec1}", min_value=0, max_value=50, value=1, step=1, key="qty1")
+        salary1 = st.number_input(f"Salary per employee (${rec1})", min_value=0, value=8000, step=500, key="salary1")
+        revenue1 = st.number_input(f"Revenue per employee (${rec1})", min_value=0, value=10000, step=500, key="revenue1")
+    receivers_data.append({"company": rec1, "qty": qty1, "salary": salary1, "revenue": revenue1})
 
-st.markdown(f"**Total monthly cost of moved employees:** ${total_cost_move:,.0f}")
-st.markdown(f"**Total monthly revenue of moved employees:** ${total_revenue_move:,.0f}")
-st.markdown(f"**Net monthly ROI of move:** ${total_revenue_move - total_cost_move:,.0f}")
+else:  # two receivers
+    col1, col2 = st.columns(2)
+    with col1:
+        rec1 = st.selectbox("First receiver:", receiver_options, key="rec1")
+        qty1 = st.number_input(f"Employees to {rec1}", min_value=0, max_value=50, value=1, step=1, key="qty1")
+        salary1 = st.number_input(f"Salary per employee ({rec1})", min_value=0, value=8000, step=500, key="salary1")
+        revenue1 = st.number_input(f"Revenue per employee ({rec1})", min_value=0, value=10000, step=500, key="revenue1")
+    with col2:
+        # Remaining receivers (excluding first)
+        remaining_opts = [r for r in receiver_options if r != rec1]
+        if not remaining_opts:
+            st.warning("No other companies available to receive.")
+            rec2 = None
+        else:
+            rec2 = st.selectbox("Second receiver:", remaining_opts, key="rec2")
+            qty2 = st.number_input(f"Employees to {rec2}", min_value=0, max_value=50, value=0, step=1, key="qty2")
+            salary2 = st.number_input(f"Salary per employee ({rec2})", min_value=0, value=8000, step=500, key="salary2")
+            revenue2 = st.number_input(f"Revenue per employee ({rec2})", min_value=0, value=10000, step=500, key="revenue2")
+    receivers = [rec1, rec2] if rec2 else [rec1]
+    receivers_data.append({"company": rec1, "qty": qty1, "salary": salary1, "revenue": revenue1})
+    if rec2:
+        receivers_data.append({"company": rec2, "qty": qty2, "salary": salary2, "revenue": revenue2})
 
-if st.button("▶ Simulate Move by Role", type="primary") and (total_cost_move > 0 or total_revenue_move > 0):
-    df_new = df_startups.copy()
-    
-    # Remove from source
-    idx_from = df_new[df_new["startup"] == startup_from].index[0]
-    df_new.loc[idx_from, "headcount"] -= sum(role_quantities.values())
-    df_new.loc[idx_from, "monthly_revenue"] -= total_revenue_move
-    df_new.loc[idx_from, "fixed_burn_monthly"] -= total_cost_move
-    df_new.loc[idx_from, "total_monthly_burn"] = df_new.loc[idx_from, "fixed_burn_monthly"] * (1 + df_new.loc[idx_from, "var_burn_pct"])
-    df_new.loc[idx_from, "net_burn"] = df_new.loc[idx_from, "total_monthly_burn"] - df_new.loc[idx_from, "monthly_revenue"]
-    
-    # Add to target
-    idx_to = df_new[df_new["startup"] == startup_to].index[0]
-    df_new.loc[idx_to, "headcount"] += sum(role_quantities.values())
-    df_new.loc[idx_to, "monthly_revenue"] += total_revenue_move
-    df_new.loc[idx_to, "fixed_burn_monthly"] += total_cost_move
-    df_new.loc[idx_to, "total_monthly_burn"] = df_new.loc[idx_to, "fixed_burn_monthly"] * (1 + df_new.loc[idx_to, "var_burn_pct"])
-    df_new.loc[idx_to, "net_burn"] = df_new.loc[idx_to, "total_monthly_burn"] - df_new.loc[idx_to, "monthly_revenue"]
-    
-    # Recalculate runway
-    new_p50 = []
-    for _, row in df_new.iterrows():
-        stats = safe_monte_carlo_runway(row["cash_balance"], max(row["net_burn"], 500))
-        new_p50.append(stats["p50"])
-    df_new["p50_new"] = new_p50
-    
-    comparison = pd.DataFrame({
-        "Startup": df_new["startup"],
-        "Runway before (months)": df_new["p50"],
-        "Runway after (months)": df_new["p50_new"]
-    })
-    comparison["Change"] = comparison["Runway after (months)"] - comparison["Runway before (months)"]
-    st.dataframe(comparison, use_container_width=True)
-    st.success(f"💰 Net monthly ROI of this move: **${total_revenue_move - total_cost_move:,.0f}**")
-    
-    # Update session state
-    df_new["p50"] = df_new["p50_new"]
-    df_new = df_new.drop(columns=["p50_new"])
-    st.session_state.df_startups = df_new
-    st.rerun()
+# Calculate total moved employees and totals
+total_moved = sum([d["qty"] for d in receivers_data])
+if total_moved == 0:
+    st.info("Enter at least one employee to move.")
+else:
+    # Calculate source changes
+    total_cost_source = sum([d["qty"] * d["salary"] for d in receivers_data])
+    total_revenue_source = sum([d["qty"] * d["revenue"] for d in receivers_data])
 
+    st.markdown(f"**Total employees moved from {source_company}:** {total_moved}")
+    st.markdown(f"**Total monthly cost transferred out:** ${total_cost_source:,.0f}")
+    st.markdown(f"**Total monthly revenue transferred out:** ${total_revenue_source:,.0f}")
+
+    if st.button("▶ Simulate Multi‑Destination Move", type="primary"):
+        df_new = df_startups.copy()
+        
+        # ---- Update source ----
+        idx_src = df_new[df_new["startup"] == source_company].index[0]
+        df_new.loc[idx_src, "headcount"] -= total_moved
+        df_new.loc[idx_src, "monthly_revenue"] -= total_revenue_source
+        df_new.loc[idx_src, "fixed_burn_monthly"] -= total_cost_source
+        df_new.loc[idx_src, "total_monthly_burn"] = df_new.loc[idx_src, "fixed_burn_monthly"] * (1 + df_new.loc[idx_src, "var_burn_pct"])
+        df_new.loc[idx_src, "net_burn"] = df_new.loc[idx_src, "total_monthly_burn"] - df_new.loc[idx_src, "monthly_revenue"]
+        
+        # ---- Update each receiver ----
+        for rec in receivers_data:
+            idx_rec = df_new[df_new["startup"] == rec["company"]].index[0]
+            df_new.loc[idx_rec, "headcount"] += rec["qty"]
+            df_new.loc[idx_rec, "monthly_revenue"] += rec["qty"] * rec["revenue"]
+            df_new.loc[idx_rec, "fixed_burn_monthly"] += rec["qty"] * rec["salary"]
+            df_new.loc[idx_rec, "total_monthly_burn"] = df_new.loc[idx_rec, "fixed_burn_monthly"] * (1 + df_new.loc[idx_rec, "var_burn_pct"])
+            df_new.loc[idx_rec, "net_burn"] = df_new.loc[idx_rec, "total_monthly_burn"] - df_new.loc[idx_rec, "monthly_revenue"]
+        
+        # Recalculate runway for all startups
+        new_p50 = []
+        for _, row in df_new.iterrows():
+            stats = safe_monte_carlo_runway(row["cash_balance"], max(row["net_burn"], 500))
+            new_p50.append(stats["p50"])
+        df_new["p50_new"] = new_p50
+        
+        # Build comparison table
+        comparison = pd.DataFrame({
+            "Startup": df_new["startup"],
+            "Runway before (months)": df_new["p50"],
+            "Runway after (months)": df_new["p50_new"]
+        })
+        comparison["Change"] = comparison["Runway after (months)"] - comparison["Runway before (months)"]
+        st.dataframe(comparison, use_container_width=True)
+        
+        # Show net burn changes per startup
+        st.subheader("Net Burn Impact per Startup")
+        burn_changes = []
+        for startup in df_startups["startup"]:
+            old_burn = df_startups[df_startups["startup"] == startup]["net_burn"].values[0]
+            new_burn = df_new[df_new["startup"] == startup]["net_burn"].values[0]
+            burn_changes.append({"Startup": startup, "Net burn before ($)": old_burn, "Net burn after ($)": new_burn, "Change ($)": new_burn - old_burn})
+        st.dataframe(pd.DataFrame(burn_changes), use_container_width=True)
+        
+        st.success(f"💰 Net portfolio monthly cash flow change: **${(total_revenue_source - total_cost_source):,.0f}** (positive means more cash for the group)")
+        
+        # Update session state
+        df_new["p50"] = df_new["p50_new"]
+        df_new = df_new.drop(columns=["p50_new"])
+        st.session_state.df_startups = df_new
+        st.rerun()
 # ---------- SECTION 3: MULTI-SHOCK SIMULATOR ----------
 st.header("🌍 Apply Multiple Shocks at Once")
 
